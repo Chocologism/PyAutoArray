@@ -364,3 +364,15 @@ class FitDataset(AbstractFit):
     @property
     def reduced_chi_squared(self) -> float:
         return self.chi_squared / int(np.size(self.mask) - np.sum(self.mask))
+
+class FitDatasetReducedChi(FitDataset):
+    @property
+    def log_likelihood(self) -> float:
+        """
+        Returns the log likelihood of each model data point's fit to the dataset, where:
+
+        Log Likelihood = -0.5*[Chi_Squared_Term + Noise_Term] (see functions above for these definitions)
+        """
+        return fit_util.log_likelihood_from(
+            chi_squared=self.reduced_chi_squared, noise_normalization=0.0
+        )
