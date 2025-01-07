@@ -20,6 +20,7 @@ from .dataset.dataset_model import DatasetModel
 from .fit.fit_dataset import AbstractFit
 from .fit.fit_dataset import FitDataset
 from .fit.fit_imaging import FitImaging
+from .fit.fit_imaging import FitImagingReducedChi
 from .fit.fit_interferometer import FitInterferometer
 from .geometry.geometry_2d import Geometry2D
 from .inversion.pixelization.mappers.abstract import AbstractMapper
