@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from autoarray import Mask2D
 
-import jax
-import jax.numpy as jnp
+
 import numpy as np
 from pathlib import Path
 import scipy
@@ -152,8 +151,8 @@ class Kernel2D(AbstractArray2D):
 
             self.mask_shape = mask_shape
             self.full_shape = full_shape
-            self.fft_psf = jnp.fft.rfft2(self.native.array, s=self.fft_shape)
-            self.fft_psf_mapping = jnp.expand_dims(self.fft_psf, 2)
+            self.fft_psf = np.fft.rfft2(self.native.array, s=self.fft_shape)
+            self.fft_psf_mapping = np.expand_dims(self.fft_psf, 2)
 
         self._use_fft = use_fft
 
@@ -549,11 +548,12 @@ class Kernel2D(AbstractArray2D):
 
     def mapping_matrix_native_from(
         self,
-        mapping_matrix: jnp.ndarray,
+        mapping_matrix: np.ndarray,
         mask: "Mask2D",
-        blurring_mapping_matrix: Optional[jnp.ndarray] = None,
+        blurring_mapping_matrix: Optional[np.ndarray] = None,
         blurring_mask: Optional["Mask2D"] = None,
-    ) -> jnp.ndarray:
+        xp=np,
+    ) -> np.ndarray:
         """
         Expand a slim mapping matrix (image-plane) and optional blurring mapping matrix
         into a full native 3D cube (ny, nx, n_src).
@@ -587,22 +587,30 @@ class Kernel2D(AbstractArray2D):
         """
         slim_to_native_tuple = self.slim_to_native_tuple
         if slim_to_native_tuple is None:
-            slim_to_native_tuple = jnp.nonzero(
-                jnp.logical_not(mask.array), size=mapping_matrix.shape[0]
-            )
+            mask_flat = xp.logical_not(mask.array)
+
+            if xp.__name__.startswith("jax"):
+                slim_to_native_tuple = xp.nonzero(
+                    mask_flat, size=mapping_matrix.shape[0]
+                )
+            else:
+                slim_to_native = mask.derive_indexes.native_for_slim.astype("int32")
+                slim_to_native_tuple = (slim_to_native[:, 0], slim_to_native[:, 1])
 
         n_src = mapping_matrix.shape[1]
 
         # Allocate full native grid (ny, nx, n_src)
-        mapping_matrix_native = jnp.zeros(
+        mapping_matrix_native = xp.zeros(
             mask.shape + (n_src,), dtype=mapping_matrix.dtype
         )
 
         # Scatter main mapping matrix into native cube
-        mapping_matrix_native = mapping_matrix_native.at[slim_to_native_tuple].set(
-            mapping_matrix
-        )
-
+        if xp.__name__.startswith("jax"):
+            mapping_matrix_native = mapping_matrix_native.at[slim_to_native_tuple].set(
+                mapping_matrix
+            )
+        else:
+            mapping_matrix_native[slim_to_native_tuple] = mapping_matrix
         # Optionally scatter blurring mapping matrix
         if blurring_mapping_matrix is not None:
             slim_to_native_blurring_tuple = self.slim_to_native_blurring_tuple
@@ -613,18 +621,34 @@ class Kernel2D(AbstractArray2D):
                         "blurring_mask must be provided if blurring_mapping_matrix is given "
                         "and slim_to_native_blurring_tuple is None."
                     )
-                slim_to_native_blurring_tuple = jnp.nonzero(
-                    jnp.logical_not(blurring_mask.array),
-                    size=blurring_mapping_matrix.shape[0],
-                )
 
-            mapping_matrix_native = mapping_matrix_native.at[
-                slim_to_native_blurring_tuple
-            ].set(blurring_mapping_matrix)
+                if xp.__name__.startswith("jax"):
+                    mask_flat = xp.logical_not(blurring_mask.array)
+                    slim_to_native_blurring_tuple = xp.nonzero(
+                        mask_flat,
+                        size=blurring_mapping_matrix.shape[0],
+                    )
+                else:
+                    slim_to_native_blurring = (
+                        blurring_mask.derive_indexes.native_for_slim.astype("int32")
+                    )
+                    slim_to_native_blurring_tuple = (
+                        slim_to_native_blurring[:, 0],
+                        slim_to_native_blurring[:, 1],
+                    )
+
+            if xp.__name__.startswith("jax"):
+                mapping_matrix_native = mapping_matrix_native.at[
+                    slim_to_native_blurring_tuple
+                ].set(blurring_mapping_matrix)
+            else:
+                mapping_matrix_native[slim_to_native_blurring_tuple] = (
+                    blurring_mapping_matrix
+                )
 
         return mapping_matrix_native
 
-    def convolved_image_from(self, image, blurring_image, jax_method="direct"):
+    def convolved_image_from(self, image, blurring_image, jax_method="direct", xp=np):
         """
         Convolve an input masked image with this PSF.
 
@@ -666,16 +690,22 @@ class Kernel2D(AbstractArray2D):
         Array2D
             The convolved image in slim (1D masked) format.
         """
+        if xp is np:
+            return self.convolved_image_via_real_space_np_from(
+                image=image, blurring_image=blurring_image, xp=xp
+            )
 
         if not self.use_fft:
             return self.convolved_image_via_real_space_from(
-                image=image, blurring_image=blurring_image, jax_method=jax_method
+                image=image, blurring_image=blurring_image, jax_method=jax_method, xp=xp
             )
+
+        import jax
 
         if self.fft_shape is None:
 
             full_shape, fft_shape, mask_shape = self.fft_shape_from(mask=image.mask)
-            fft_psf = jnp.fft.rfft2(self.stored_native.array, s=fft_shape)
+            fft_psf = xp.fft.rfft2(self.stored_native.array, s=fft_shape, axes=(0, 1))
 
             image_shape_original = image.shape_native
 
@@ -696,26 +726,30 @@ class Kernel2D(AbstractArray2D):
         slim_to_native_blurring_tuple = self.slim_to_native_blurring_tuple
 
         if slim_to_native_tuple is None:
-            slim_to_native_tuple = jnp.nonzero(
-                jnp.logical_not(image.mask.array), size=image.shape[0]
-            )
+
+            mask_flat = xp.logical_not(image.mask.array)
+            slim_to_native_tuple = xp.nonzero(mask_flat, size=image.shape[0])
 
         # start with native image padded with zeros
-        image_both_native = jnp.zeros(image.mask.shape, dtype=image.dtype)
+        image_both_native = xp.zeros(image.mask.shape, dtype=image.dtype)
+
         image_both_native = image_both_native.at[slim_to_native_tuple].set(
-            jnp.asarray(image.array)
+            xp.asarray(image.array)
         )
 
         # add blurring contribution if provided
         if blurring_image is not None:
             if slim_to_native_blurring_tuple is None:
-                slim_to_native_blurring_tuple = jnp.nonzero(
-                    jnp.logical_not(blurring_image.mask.array),
-                    size=blurring_image.shape[0],
+
+                mask_flat = xp.logical_not(blurring_image.mask.array)
+                slim_to_native_blurring_tuple = xp.nonzero(
+                    mask_flat, size=blurring_image.shape[0]
                 )
+
             image_both_native = image_both_native.at[slim_to_native_blurring_tuple].set(
-                jnp.asarray(blurring_image.array)
+                xp.asarray(blurring_image.array)
             )
+
         else:
             warnings.warn(
                 "No blurring_image provided. Only the direct image will be convolved. "
@@ -723,19 +757,21 @@ class Kernel2D(AbstractArray2D):
             )
 
         # FFT the combined image
-        fft_image_native = jnp.fft.rfft2(image_both_native, s=fft_shape, axes=(0, 1))
+        fft_image_native = xp.fft.rfft2(image_both_native, s=fft_shape, axes=(0, 1))
 
         # Multiply by PSF in Fourier space and invert
-        blurred_image_full = jnp.fft.irfft2(
+        blurred_image_full = xp.fft.irfft2(
             fft_psf * fft_image_native, s=fft_shape, axes=(0, 1)
         )
+
+        out_shape_full = mask_shape
 
         # Crop back to mask_shape
         start_indices = tuple(
             (full_size - out_size) // 2
             for full_size, out_size in zip(full_shape, mask_shape)
         )
-        out_shape_full = mask_shape
+
         blurred_image_native = jax.lax.dynamic_slice(
             blurred_image_full, start_indices, out_shape_full
         )
@@ -759,6 +795,7 @@ class Kernel2D(AbstractArray2D):
         blurring_mapping_matrix=None,
         blurring_mask: Optional[Mask2D] = None,
         jax_method="direct",
+        xp=np,
     ):
         """
         Convolve a source-plane mapping matrix with this PSF.
@@ -804,6 +841,15 @@ class Kernel2D(AbstractArray2D):
         ndarray of shape (N_pix, N_src)
             Convolved mapping matrix in slim form.
         """
+        if xp is np:
+            return self.convolved_mapping_matrix_via_real_space_np_from(
+                mapping_matrix=mapping_matrix,
+                mask=mask,
+                blurring_mapping_matrix=blurring_mapping_matrix,
+                blurring_mask=blurring_mask,
+                xp=xp,
+            )
+
         if not self.use_fft:
             return self.convolved_mapping_matrix_via_real_space_from(
                 mapping_matrix=mapping_matrix,
@@ -811,7 +857,10 @@ class Kernel2D(AbstractArray2D):
                 blurring_mapping_matrix=blurring_mapping_matrix,
                 blurring_mask=blurring_mask,
                 jax_method=jax_method,
+                xp=xp,
             )
+
+        import jax
 
         if self.fft_shape is None:
 
@@ -834,22 +883,23 @@ class Kernel2D(AbstractArray2D):
         slim_to_native_tuple = self.slim_to_native_tuple
 
         if slim_to_native_tuple is None:
-            slim_to_native_tuple = jnp.nonzero(
-                jnp.logical_not(mask.array), size=mapping_matrix.shape[0]
-            )
+
+            mask_flat = xp.logical_not(mask.array)
+            slim_to_native_tuple = xp.nonzero(mask_flat, size=mapping_matrix.shape[0])
 
         mapping_matrix_native = self.mapping_matrix_native_from(
             mapping_matrix=mapping_matrix,
             mask=mask,
             blurring_mapping_matrix=blurring_mapping_matrix,
             blurring_mask=blurring_mask,
+            xp=xp,
         )
 
         # FFT convolution
-        fft_mapping_matrix_native = jnp.fft.rfft2(
+        fft_mapping_matrix_native = xp.fft.rfft2(
             mapping_matrix_native, s=fft_shape, axes=(0, 1)
         )
-        blurred_mapping_matrix_full = jnp.fft.irfft2(
+        blurred_mapping_matrix_full = xp.fft.irfft2(
             fft_psf_mapping * fft_mapping_matrix_native,
             s=fft_shape,
             axes=(0, 1),
@@ -861,8 +911,11 @@ class Kernel2D(AbstractArray2D):
             for full_size, out_size in zip(full_shape, mask_shape)
         ) + (0,)
         out_shape_full = mask_shape + (blurred_mapping_matrix_full.shape[2],)
+
         blurred_mapping_matrix_native = jax.lax.dynamic_slice(
-            blurred_mapping_matrix_full, start_indices, out_shape_full
+            blurred_mapping_matrix_full,
+            start_indices,
+            out_shape_full,
         )
 
         # return slim form
@@ -967,6 +1020,7 @@ class Kernel2D(AbstractArray2D):
         image: np.ndarray,
         blurring_image: Optional[np.ndarray] = None,
         jax_method: str = "direct",
+        xp=np,
     ):
         """
         Convolve an input masked image with this PSF in real space.
@@ -994,31 +1048,38 @@ class Kernel2D(AbstractArray2D):
             Convolved image in slim format.
         """
 
+        if xp is np:
+            return self.convolved_image_via_real_space_np_from(
+                image=image, blurring_image=blurring_image, xp=xp
+            )
+
+        import jax
+
         slim_to_native_tuple = self.slim_to_native_tuple
         slim_to_native_blurring_tuple = self.slim_to_native_blurring_tuple
 
         if slim_to_native_tuple is None:
-            slim_to_native_tuple = jnp.nonzero(
-                jnp.logical_not(image.mask.array), size=image.shape[0]
-            )
+            mask_flat = xp.logical_not(image.mask.array)
+            slim_to_native_tuple = xp.nonzero(mask_flat, size=image.shape[0])
 
         # start with native array padded with zeros
-        image_native = jnp.zeros(image.mask.shape, dtype=jnp.asarray(image.array).dtype)
+        image_native = xp.zeros(image.mask.shape, dtype=xp.asarray(image.array).dtype)
 
         # set image pixels
         image_native = image_native.at[slim_to_native_tuple].set(
-            jnp.asarray(image.array)
+            xp.asarray(image.array)
         )
 
         # add blurring contribution if provided
         if blurring_image is not None:
             if slim_to_native_blurring_tuple is None:
-                slim_to_native_blurring_tuple = jnp.nonzero(
-                    jnp.logical_not(blurring_image.mask.array),
+
+                slim_to_native_blurring_tuple = xp.nonzero(
+                    mask_flat,
                     size=blurring_image.shape[0],
                 )
             image_native = image_native.at[slim_to_native_blurring_tuple].set(
-                jnp.asarray(blurring_image.array)
+                xp.asarray(blurring_image.array)
             )
         else:
             warnings.warn(
@@ -1028,6 +1089,7 @@ class Kernel2D(AbstractArray2D):
 
         # perform real-space convolution
         kernel = self.stored_native.array
+
         convolve_native = jax.scipy.signal.convolve(
             image_native, kernel, mode="same", method=jax_method
         )
@@ -1043,6 +1105,7 @@ class Kernel2D(AbstractArray2D):
         blurring_mapping_matrix: Optional[np.ndarray] = None,
         blurring_mask: Optional[Mask2D] = None,
         jax_method: str = "direct",
+        xp=np,
     ):
         """
         Convolve a source-plane mapping matrix with this PSF in real space.
@@ -1072,11 +1135,25 @@ class Kernel2D(AbstractArray2D):
             Convolved mapping matrix in slim form.
         """
 
+        if xp is np:
+            return self.convolved_mapping_matrix_via_real_space_np_from(
+                mapping_matrix=mapping_matrix,
+                mask=mask,
+                blurring_mapping_matrix=blurring_mapping_matrix,
+                blurring_mask=blurring_mask,
+                xp=xp,
+            )
+
+        import jax
+
         slim_to_native_tuple = self.slim_to_native_tuple
 
         if slim_to_native_tuple is None:
-            slim_to_native_tuple = jnp.nonzero(
-                jnp.logical_not(mask.array), size=mapping_matrix.shape[0]
+
+            mask_flat = xp.logical_not(mask.array)
+            slim_to_native_tuple = xp.nonzero(
+                mask_flat,
+                size=mapping_matrix.shape[0],
             )
 
         mapping_matrix_native = self.mapping_matrix_native_from(
@@ -1084,11 +1161,156 @@ class Kernel2D(AbstractArray2D):
             mask=mask,
             blurring_mapping_matrix=blurring_mapping_matrix,
             blurring_mask=blurring_mask,
+            xp=xp,
         )
         # 6) Real-space convolution, broadcast kernel over source axis
         kernel = self.stored_native.array
+
         blurred_mapping_matrix_native = jax.scipy.signal.convolve(
-            mapping_matrix_native, kernel[..., None], mode="same", method=jax_method
+            mapping_matrix_native,
+            kernel[..., None],
+            mode="same",
+            method=jax_method,
+        )
+
+        # return slim form
+        return blurred_mapping_matrix_native[slim_to_native_tuple]
+
+    def convolved_image_via_real_space_np_from(
+        self, image: np.ndarray, blurring_image: Optional[np.ndarray] = None, xp=np
+    ):
+        """
+        Convolve an input masked image with this PSF in real space.
+
+        This is the direct method (non-FFT) where convolution is explicitly
+        performed using ``jax.scipy.signal.convolve`` with the kernel in native
+        space.
+
+        Unlike FFT convolution, this does not require padding shapes, but it is
+        typically much slower for large kernels (> ~5x5).
+
+        Parameters
+        ----------
+        image
+            Masked image array to convolve.
+        blurring_image
+            Blurring contribution from outside the mask core. If None, only the
+            direct image is convolved (which may be numerically incorrect).
+        jax_method
+            Method flag for JAX convolution backend (default "direct").
+
+        Returns
+        -------
+        Array2D
+            Convolved image in slim format.
+        """
+
+        from scipy.signal import convolve as scipy_convolve
+
+        slim_to_native_tuple = self.slim_to_native_tuple
+        slim_to_native_blurring_tuple = self.slim_to_native_blurring_tuple
+
+        if slim_to_native_tuple is None:
+            slim_to_native = image.mask.derive_indexes.native_for_slim.astype("int32")
+            slim_to_native_tuple = (slim_to_native[:, 0], slim_to_native[:, 1])
+
+        # start with native array padded with zeros
+        image_native = xp.zeros(image.mask.shape, dtype=xp.asarray(image.array).dtype)
+
+        # set image pixels
+        image_native[slim_to_native_tuple] = xp.asarray(image.array)
+
+        # add blurring contribution if provided
+        if blurring_image is not None:
+            if slim_to_native_blurring_tuple is None:
+
+                slim_to_native_blurring = (
+                    blurring_image.mask.derive_indexes.native_for_slim.astype("int32")
+                )
+                slim_to_native_blurring_tuple = (
+                    slim_to_native_blurring[:, 0],
+                    slim_to_native_blurring[:, 1],
+                )
+
+            image_native[slim_to_native_blurring_tuple] = xp.asarray(
+                blurring_image.array
+            )
+        else:
+            warnings.warn(
+                "No blurring_image provided. Only the direct image will be convolved. "
+                "This may change the correctness of the PSF convolution."
+            )
+
+        # perform real-space convolution
+        kernel = self.stored_native.array
+
+        convolve_native = scipy_convolve(
+            image_native, kernel, mode="same", method="auto"
+        )
+
+        convolved_array_1d = convolve_native[slim_to_native_tuple]
+
+        return Array2D(values=convolved_array_1d, mask=image.mask)
+
+    def convolved_mapping_matrix_via_real_space_np_from(
+        self,
+        mapping_matrix: np.ndarray,
+        mask,
+        blurring_mapping_matrix: Optional[np.ndarray] = None,
+        blurring_mask: Optional[Mask2D] = None,
+        xp=np,
+    ):
+        """
+        Convolve a source-plane mapping matrix with this PSF in real space.
+
+        Equivalent to :meth:`convolved_mapping_matrix_from`, but using explicit
+        real-space convolution rather than FFTs. This avoids FFT padding issues
+        but is slower for large kernels.
+
+        The mapping matrix is expanded into a native cube (ny, nx, n_src),
+        convolved with the kernel (broadcast along the source axis),
+        and reduced back to slim form.
+
+        Parameters
+        ----------
+        mapping_matrix
+            Slim mapping matrix from unmasked pixels to source pixels.
+        mask
+            Mask defining the pixelization grid.
+        blurring_mapping_matrix : ndarray (N_blur, N_src), optional
+            Mapping matrix for blurring region pixels outside the mask core.
+        jax_method
+            Backend passed to JAX convolution.
+
+        Returns
+        -------
+        ndarray (N_pix, N_src)
+            Convolved mapping matrix in slim form.
+        """
+
+        from scipy.signal import convolve as scipy_convolve
+
+        slim_to_native_tuple = self.slim_to_native_tuple
+
+        if slim_to_native_tuple is None:
+
+            slim_to_native = mask.derive_indexes.native_for_slim.astype("int32")
+            slim_to_native_tuple = (slim_to_native[:, 0], slim_to_native[:, 1])
+
+        mapping_matrix_native = self.mapping_matrix_native_from(
+            mapping_matrix=mapping_matrix,
+            mask=mask,
+            blurring_mapping_matrix=blurring_mapping_matrix,
+            blurring_mask=blurring_mask,
+            xp=xp,
+        )
+        # 6) Real-space convolution, broadcast kernel over source axis
+        kernel = self.stored_native.array
+
+        blurred_mapping_matrix_native = scipy_convolve(
+            mapping_matrix_native,
+            kernel[..., None],
+            mode="same",
         )
 
         # return slim form

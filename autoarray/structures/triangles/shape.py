@@ -3,8 +3,6 @@ from typing import List, Tuple
 
 import numpy as np
 
-from autoarray.numpy_wrapper import register_pytree_node_class
-
 
 class Shape(ABC):
     """
@@ -35,7 +33,6 @@ class Shape(ABC):
         """
 
 
-@register_pytree_node_class
 class Point(Shape):
     def __init__(self, x: float, y: float):
         """
@@ -108,7 +105,6 @@ def centroid(triangles: np.ndarray):
     return (x1 + x2 + x3) / 3, (y1 + y2 + y3) / 3
 
 
-@register_pytree_node_class
 class Circle(Point):
     def __init__(
         self,

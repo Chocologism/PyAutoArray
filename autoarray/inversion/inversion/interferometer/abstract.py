@@ -18,6 +18,7 @@ class AbstractInversionInterferometer(AbstractInversion):
         dataset: Union[Interferometer, DatasetInterface],
         linear_obj_list: List[LinearObj],
         settings: SettingsInversion = SettingsInversion(),
+        xp=np,
     ):
         """
         Constructs linear equations (via vectors and matrices) which allow for sets of simultaneous linear equations
@@ -41,9 +42,7 @@ class AbstractInversionInterferometer(AbstractInversion):
         """
 
         super().__init__(
-            dataset=dataset,
-            linear_obj_list=linear_obj_list,
-            settings=settings,
+            dataset=dataset, linear_obj_list=linear_obj_list, settings=settings, xp=xp
         )
 
     @property
@@ -66,7 +65,7 @@ class AbstractInversionInterferometer(AbstractInversion):
         """
         return [
             self.transformer.transform_mapping_matrix(
-                mapping_matrix=linear_obj.mapping_matrix
+                mapping_matrix=linear_obj.mapping_matrix, xp=self._xp
             )
             for linear_obj in self.linear_obj_list
         ]
@@ -111,6 +110,7 @@ class AbstractInversionInterferometer(AbstractInversion):
                 inversion_util.mapped_reconstructed_data_via_mapping_matrix_from(
                     mapping_matrix=linear_obj.mapping_matrix,
                     reconstruction=reconstruction,
+                    xp=self._xp,
                 )
             )
 

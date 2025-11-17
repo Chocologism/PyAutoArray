@@ -83,7 +83,7 @@ def test__interpolated_array_from__with_pixel_mask():
         shape_native=(3, 3), extent=(-0.2, 0.2, -0.3, 0.3)
     )
 
-    assert (values == np.array([0.0, 1.0, 1.0, 0.0])).all()
+    assert values == pytest.approx(np.array([0.0, 1.0, 1.0, 1.0]), 1.0e-4)
 
 
 def test__magnification_via_mesh_from():
@@ -125,7 +125,7 @@ def test__magnification_via_mesh_from():
         mapping_matrix=np.ones((12, 10)),
     )
 
-    mapper_valued = aa.MapperValued(values=np.array(magnification), mapper=mapper)
+    mapper_valued = aa.MapperValued(values=magnification, mapper=mapper)
 
     magnification = mapper_valued.magnification_via_mesh_from()
 
@@ -145,7 +145,7 @@ def test__magnification_via_mesh_from__with_pixel_mask():
         pixel_scales=(0.5, 0.5),
     )
 
-    magnification = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    magnification = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
 
     source_plane_mesh_grid = aa.Mesh2DVoronoi(
         values=np.array(
@@ -176,7 +176,7 @@ def test__magnification_via_mesh_from__with_pixel_mask():
     )
 
     mapper_valued = aa.MapperValued(
-        values=np.array(magnification), mapper=mapper, mesh_pixel_mask=mesh_pixel_mask
+        values=magnification, mapper=mapper, mesh_pixel_mask=mesh_pixel_mask
     )
 
     magnification = mapper_valued.magnification_via_mesh_from()

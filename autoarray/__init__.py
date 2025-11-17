@@ -1,3 +1,4 @@
+from autoconf import jax_wrapper
 from autoconf.dictable import register_parser
 from autoconf import conf
 
@@ -102,4 +103,4 @@ from autoconf.fitsable import hdu_list_for_output_from
 
 conf.instance.register(__file__)
 
-__version__ = "2025.10.20.5"
+__version__ = "2025.11.5.1"

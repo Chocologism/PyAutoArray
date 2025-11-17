@@ -63,6 +63,7 @@ def test__inversion_imaging__via_mapper(
     rectangular_mapper_7x7_3x3,
     delaunay_mapper_9_3x3,
 ):
+
     inversion = aa.Inversion(
         dataset=masked_imaging_7x7_no_blur,
         linear_obj_list=[rectangular_mapper_7x7_3x3],

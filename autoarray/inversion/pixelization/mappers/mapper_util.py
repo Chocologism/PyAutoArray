@@ -1,43 +1,105 @@
 from functools import partial
-import jax
-import jax.numpy as jnp
 import numpy as np
 from typing import Tuple
 
-from autoconf import conf
-
-from autoarray import exc
-
 
 def forward_interp(xp, yp, x):
-    return jax.vmap(jnp.interp, in_axes=(1, 1, None, None, None))(x, xp, yp, 0, 1).T
+
+    import jax
+    import jax.numpy as jnp
+
+    return jax.vmap(jnp.interp, in_axes=(1, 1, 1, None, None), out_axes=(1))(
+        x, xp, yp, 0, 1
+    )
 
 
 def reverse_interp(xp, yp, x):
-    return jax.vmap(jnp.interp, in_axes=(1, None, 1))(x, xp, yp).T
+    import jax
+    import jax.numpy as jnp
+
+    return jax.vmap(jnp.interp, in_axes=(1, 1, 1), out_axes=(1))(x, xp, yp)
 
 
-def create_transforms(traced_points):
-    # make functions that takes a set of traced points
-    # stored in a (N, 2) array and return functions that
-    # take in (N, 2) arrays and transform the values into
-    # the range (0, 1) and the inverse transform
+def forward_interp_np(xp, yp, x):
+    """
+    xp: (N, M)
+    yp: (N, M)
+    x : (M,)  ← one x per column
+    """
+
+    if yp.ndim == 1 and xp.ndim == 2:
+        yp = np.broadcast_to(yp[:, None], xp.shape)
+
+    K, M = x.shape
+
+    out = np.empty((K, 2), dtype=xp.dtype)
+
+    for j in range(2):
+        out[:, j] = np.interp(x[:, j], xp[:, j], yp[:, j], left=0, right=1)
+
+    return out
+
+
+def reverse_interp_np(xp, yp, x):
+    """
+    xp : (N,) or (N, M)
+    yp : (N, M)
+    x  : (K, M)   query points per column
+    """
+
+    # Ensure xp is 2D: (N, M)
+    if xp.ndim == 1 and yp.ndim == 2:  # (N, 1)
+        xp = np.broadcast_to(xp[:, None], yp.shape)
+
+    # Shapes
+    K, M = x.shape
+
+    # Output
+    out = np.empty((K, 2), dtype=yp.dtype)
+
+    # Column-wise interpolation (cannot avoid this loop in pure NumPy)
+    for j in range(2):
+        out[:, j] = np.interp(x[:, j], xp[:, j], yp[:, j])
+
+    return out
+
+
+def create_transforms(traced_points, mesh_weight_map=None, xp=np):
+
     N = traced_points.shape[0]  # // 2
-    t = jnp.arange(1, N + 1) / (N + 1)
 
-    sort_points = jnp.sort(traced_points, axis=0)  # [::2]
+    if mesh_weight_map is None:
+        t = xp.arange(1, N + 1) / (N + 1)
+        t = xp.stack([t, t], axis=1)
+        sort_points = xp.sort(traced_points, axis=0)  # [::2]
+    else:
+        sdx = xp.argsort(traced_points, axis=0)
+        sort_points = xp.take_along_axis(traced_points, sdx, axis=0)
+        t = xp.stack([mesh_weight_map, mesh_weight_map], axis=1)
+        t = xp.take_along_axis(t, sdx, axis=0)
+        t = xp.cumsum(t, axis=0)
 
-    transform = partial(forward_interp, sort_points, t)
-    inv_transform = partial(reverse_interp, t, sort_points)
+    if xp.__name__.startswith("jax"):
+        transform = partial(forward_interp, sort_points, t)
+        inv_transform = partial(reverse_interp, t, sort_points)
+        return transform, inv_transform
+
+    transform = partial(forward_interp_np, sort_points, t)
+    inv_transform = partial(reverse_interp_np, t, sort_points)
     return transform, inv_transform
 
 
-def adaptive_rectangular_transformed_grid_from(source_plane_data_grid, grid):
+def adaptive_rectangular_transformed_grid_from(
+    source_plane_data_grid, grid, mesh_weight_map=None, xp=np
+):
+
     mu = source_plane_data_grid.mean(axis=0)
     scale = source_plane_data_grid.std(axis=0).min()
     source_grid_scaled = (source_plane_data_grid - mu) / scale
 
-    transform, inv_transform = create_transforms(source_grid_scaled)
+    transform, inv_transform = create_transforms(
+        source_grid_scaled, mesh_weight_map=mesh_weight_map, xp=xp
+    )
 
     def inv_full(U):
         return inv_transform(U) * scale + mu
@@ -45,32 +107,39 @@ def adaptive_rectangular_transformed_grid_from(source_plane_data_grid, grid):
     return inv_full(grid)
 
 
-def adaptive_rectangular_areas_from(source_grid_size, source_plane_data_grid):
+def adaptive_rectangular_areas_from(
+    source_grid_shape, source_plane_data_grid, mesh_weight_map=None, xp=np
+):
 
-    pixel_edges_1d = jnp.linspace(0, 1, source_grid_size + 1)
+    edges_y = xp.linspace(1, 0, source_grid_shape[0] + 1)
+    edges_x = xp.linspace(0, 1, source_grid_shape[1] + 1)
 
     mu = source_plane_data_grid.mean(axis=0)
     scale = source_plane_data_grid.std(axis=0).min()
     source_grid_scaled = (source_plane_data_grid - mu) / scale
 
-    transform, inv_transform = create_transforms(source_grid_scaled)
+    transform, inv_transform = create_transforms(
+        source_grid_scaled, mesh_weight_map=mesh_weight_map, xp=xp
+    )
 
     def inv_full(U):
         return inv_transform(U) * scale + mu
 
-    pixel_edges = inv_full(jnp.stack([pixel_edges_1d, pixel_edges_1d]).T)
-    pixel_lengths = jnp.diff(pixel_edges, axis=0).squeeze()  # shape (N_source, 2)
+    pixel_edges = inv_full(xp.stack([edges_y, edges_x]).T)
+    pixel_lengths = xp.diff(pixel_edges, axis=0).squeeze()  # shape (N_source, 2)
 
     dy = pixel_lengths[:, 0]
     dx = pixel_lengths[:, 1]
 
-    return jnp.outer(dy, dx).flatten()
+    return xp.abs(xp.outer(dy, dx).flatten())
 
 
 def adaptive_rectangular_mappings_weights_via_interpolation_from(
     source_grid_size: int,
     source_plane_data_grid,
     source_plane_data_grid_over_sampled,
+    mesh_weight_map=None,
+    xp=np,
 ):
     """
     Compute bilinear interpolation indices and weights for mapping an oversampled
@@ -112,6 +181,9 @@ def adaptive_rectangular_mappings_weights_via_interpolation_from(
         The base source-plane coordinates, used to define normalization and transforms.
     source_plane_data_grid_over_sampled : (N, 2) ndarray
         Oversampled source-plane coordinates to be interpolated onto the rectangular grid.
+    mesh_weight_map
+        The weight map used to weight the creation of the rectangular mesh grid, which is used for the
+        `RectangularBrightness` mesh which adapts the size of its pixels to where the source is reconstructed.
 
     Returns
     -------
@@ -129,7 +201,9 @@ def adaptive_rectangular_mappings_weights_via_interpolation_from(
     source_grid_scaled = (source_plane_data_grid - mu) / scale
 
     # --- Step 2. Build transforms ---
-    transform, inv_transform = create_transforms(source_grid_scaled)
+    transform, inv_transform = create_transforms(
+        source_grid_scaled, mesh_weight_map=mesh_weight_map, xp=xp
+    )
 
     # --- Step 3. Transform oversampled grid into index space ---
     grid_over_sampled_scaled = (source_plane_data_grid_over_sampled - mu) / scale
@@ -137,16 +211,16 @@ def adaptive_rectangular_mappings_weights_via_interpolation_from(
     grid_over_index = (source_grid_size - 3) * grid_over_sampled_transformed + 1
 
     # --- Step 4. Floor/ceil indices ---
-    ix_down = jnp.floor(grid_over_index[:, 0])
-    ix_up = jnp.ceil(grid_over_index[:, 0])
-    iy_down = jnp.floor(grid_over_index[:, 1])
-    iy_up = jnp.ceil(grid_over_index[:, 1])
+    ix_down = xp.floor(grid_over_index[:, 0])
+    ix_up = xp.ceil(grid_over_index[:, 0])
+    iy_down = xp.floor(grid_over_index[:, 1])
+    iy_up = xp.ceil(grid_over_index[:, 1])
 
     # --- Step 5. Four corners ---
-    idx_tl = jnp.stack([ix_up, iy_down], axis=1)
-    idx_tr = jnp.stack([ix_up, iy_up], axis=1)
-    idx_br = jnp.stack([ix_down, iy_up], axis=1)
-    idx_bl = jnp.stack([ix_down, iy_down], axis=1)
+    idx_tl = xp.stack([ix_up, iy_down], axis=1)
+    idx_tr = xp.stack([ix_up, iy_up], axis=1)
+    idx_br = xp.stack([ix_down, iy_up], axis=1)
+    idx_bl = xp.stack([ix_down, iy_down], axis=1)
 
     # --- Step 6. Flatten indices ---
     def flatten(idx, n):
@@ -159,7 +233,7 @@ def adaptive_rectangular_mappings_weights_via_interpolation_from(
     flat_bl = flatten(idx_bl, source_grid_size)
     flat_br = flatten(idx_br, source_grid_size)
 
-    flat_indices = jnp.stack([flat_tl, flat_tr, flat_bl, flat_br], axis=1).astype(
+    flat_indices = xp.stack([flat_tl, flat_tr, flat_bl, flat_br], axis=1).astype(
         "int64"
     )
 
@@ -172,15 +246,16 @@ def adaptive_rectangular_mappings_weights_via_interpolation_from(
     w_tr = (1 - t_row) * t_col
     w_bl = t_row * (1 - t_col)
     w_br = t_row * t_col
-    weights = jnp.stack([w_tl, w_tr, w_bl, w_br], axis=1)
+    weights = xp.stack([w_tl, w_tr, w_bl, w_br], axis=1)
 
     return flat_indices, weights
 
 
 def rectangular_mappings_weights_via_interpolation_from(
     shape_native: Tuple[int, int],
-    source_plane_data_grid: jnp.ndarray,
-    source_plane_mesh_grid: jnp.ndarray,
+    source_plane_data_grid: np.ndarray,
+    source_plane_mesh_grid: np.ndarray,
+    xp=np,
 ):
     """
     Compute bilinear interpolation weights and corresponding rectangular mesh indices for an irregular grid.
@@ -203,10 +278,10 @@ def rectangular_mappings_weights_via_interpolation_from(
 
     Returns
     -------
-    mappings : jnp.ndarray of shape (N, 4)
+    mappings : np.ndarray of shape (N, 4)
         Indices of the four nearest rectangular mesh pixels in the flattened mesh grid.
         Order is: top-left, top-right, bottom-left, bottom-right.
-    weights : jnp.ndarray of shape (N, 4)
+    weights : np.ndarray of shape (N, 4)
         Bilinear interpolation weights corresponding to the four nearest mesh pixels.
 
     Notes
@@ -238,12 +313,12 @@ def rectangular_mappings_weights_via_interpolation_from(
     fx = (irregular[:, 1] - x_min) / dx
 
     # Integer indices of top-left corners
-    ix = jnp.floor(fx).astype(jnp.int32)
-    iy = jnp.floor(fy).astype(jnp.int32)
+    ix = xp.floor(fx).astype(xp.int32)
+    iy = xp.floor(fy).astype(xp.int32)
 
     # Clip to stay within bounds
-    ix = jnp.clip(ix, 0, Nx - 2)
-    iy = jnp.clip(iy, 0, Ny - 2)
+    ix = xp.clip(ix, 0, Nx - 2)
+    iy = xp.clip(iy, 0, Ny - 2)
 
     # Local coordinates inside the cell (0 <= tx, ty <= 1)
     tx = fx - ix
@@ -255,7 +330,7 @@ def rectangular_mappings_weights_via_interpolation_from(
     w01 = (1 - tx) * ty
     w11 = tx * ty
 
-    weights = jnp.stack([w00, w10, w01, w11], axis=1)  # shape (N_irregular, 4)
+    weights = xp.stack([w00, w10, w01, w11], axis=1)  # shape (N_irregular, 4)
 
     # Compute indices of 4 surrounding pixels in the flattened mesh
     i00 = iy * Nx + ix
@@ -263,7 +338,7 @@ def rectangular_mappings_weights_via_interpolation_from(
     i01 = (iy + 1) * Nx + ix
     i11 = (iy + 1) * Nx + (ix + 1)
 
-    mappings = jnp.stack([i00, i10, i01, i11], axis=1)  # shape (N_irregular, 4)
+    mappings = xp.stack([i00, i10, i01, i11], axis=1)  # shape (N_irregular, 4)
 
     return mappings, weights
 
@@ -291,6 +366,7 @@ def adaptive_pixel_signals_from(
     pix_size_for_sub_slim_index: np.ndarray,
     slim_index_for_sub_slim_index: np.ndarray,
     adapt_data: np.ndarray,
+    xp=np,
 ) -> np.ndarray:
     """
     Returns the signal in each pixel, where the signal is the sum of its mapped data values.
@@ -327,35 +403,40 @@ def adaptive_pixel_signals_from(
     flat_weights = pixel_weights.reshape(-1)  # (M_sub*B,)
 
     # 2) Build a matching “parent‐slim” index for each flattened entry:
-    I_sub = jnp.repeat(jnp.arange(M_sub), B)  # (M_sub*B,)
+    I_sub = xp.repeat(xp.arange(M_sub), B)  # (M_sub*B,)
 
     # 3) Mask out any k >= pix_size_for_sub_slim_index[i]
-    valid = I_sub < 0  # dummy to get shape
-    # better:
-    valid = (jnp.arange(B)[None, :] < pix_size_for_sub_slim_index[:, None]).reshape(-1)
+    valid = (xp.arange(B)[None, :] < pix_size_for_sub_slim_index[:, None]).reshape(-1)
 
-    flat_weights = jnp.where(valid, flat_weights, 0.0)
-    flat_pixidx = jnp.where(
+    flat_weights = xp.where(valid, flat_weights, 0.0)
+    flat_pixidx = xp.where(
         valid, flat_pixidx, pixels
     )  # send invalid indices to an out-of-bounds slot
 
     # 4) Look up data & multiply by mapping weights:
-    flat_data_vals = jnp.take(adapt_data[slim_index_for_sub_slim_index], I_sub, axis=0)
+    flat_data_vals = xp.take(adapt_data[slim_index_for_sub_slim_index], I_sub, axis=0)
     flat_contrib = flat_data_vals * flat_weights  # (M_sub*B,)
 
+    pixel_signals = xp.zeros((pixels + 1,))
+    pixel_counts = xp.zeros((pixels + 1,))
+
     # 5) Scatter‐add into signal sums and counts:
-    pixel_signals = jnp.zeros((pixels + 1,)).at[flat_pixidx].add(flat_contrib)
-    pixel_counts = jnp.zeros((pixels + 1,)).at[flat_pixidx].add(valid.astype(float))
+    if xp.__name__.startswith("jax"):
+        pixel_signals = pixel_signals.at[flat_pixidx].add(flat_contrib)
+        pixel_counts = pixel_counts.at[flat_pixidx].add(valid.astype(float))
+    else:
+        xp.add.at(pixel_signals, flat_pixidx, flat_contrib)
+        xp.add.at(pixel_counts, flat_pixidx, valid.astype(float))
 
     # 6) Drop the extra “out-of-bounds” slot:
     pixel_signals = pixel_signals[:pixels]
     pixel_counts = pixel_counts[:pixels]
 
     # 7) Normalize
-    pixel_counts = jnp.where(pixel_counts > 0, pixel_counts, 1.0)
+    pixel_counts = xp.where(pixel_counts > 0, pixel_counts, 1.0)
     pixel_signals = pixel_signals / pixel_counts
-    max_sig = jnp.max(pixel_signals)
-    pixel_signals = jnp.where(max_sig > 0, pixel_signals / max_sig, pixel_signals)
+    max_sig = xp.max(pixel_signals)
+    pixel_signals = xp.where(max_sig > 0, pixel_signals / max_sig, pixel_signals)
 
     # 8) Exponentiate
     return pixel_signals**signal_scale
@@ -369,6 +450,7 @@ def mapping_matrix_from(
     total_mask_pixels: int,
     slim_index_for_sub_slim_index: np.ndarray,
     sub_fraction: np.ndarray,
+    xp=np,
 ) -> np.ndarray:
     """
     Returns the mapping matrix, which is a matrix representing the mapping between every unmasked sub-pixel of the data
@@ -448,11 +530,11 @@ def mapping_matrix_from(
     # 1) Flatten
     flat_pixidx = pix_indexes_for_sub_slim_index.reshape(-1)  # (M_sub*B,)
     flat_w = pix_weights_for_sub_slim_index.reshape(-1)  # (M_sub*B,)
-    flat_parent = jnp.repeat(slim_index_for_sub_slim_index, B)  # (M_sub*B,)
-    flat_count = jnp.repeat(pix_size_for_sub_slim_index, B)  # (M_sub*B,)
+    flat_parent = xp.repeat(slim_index_for_sub_slim_index, B)  # (M_sub*B,)
+    flat_count = xp.repeat(pix_size_for_sub_slim_index, B)  # (M_sub*B,)
 
     # 2) Build valid mask: k < pix_size[i]
-    k = jnp.tile(jnp.arange(B), M_sub)  # (M_sub*B,)
+    k = xp.tile(xp.arange(B), M_sub)  # (M_sub*B,)
     valid = k < flat_count  # (M_sub*B,)
 
     # 3) Zero out invalid weights
@@ -460,15 +542,18 @@ def mapping_matrix_from(
 
     # 4) Redirect -1 indices to extra bin S
     OUT = S
-    flat_pixidx = jnp.where(flat_pixidx < 0, OUT, flat_pixidx)
+    flat_pixidx = xp.where(flat_pixidx < 0, OUT, flat_pixidx)
 
     # 5) Multiply by sub_fraction of the slim row
-    flat_frac = sub_fraction[flat_parent]  # (M_sub*B,)
+    flat_frac = xp.take(sub_fraction, flat_parent, axis=0)  # (M_sub*B,)
     flat_contrib = flat_w * flat_frac  # (M_sub*B,)
 
     # 6) Scatter into (M × (S+1)), summing duplicates
-    mat = jnp.zeros((M, S + 1), dtype=flat_contrib.dtype)
-    mat = mat.at[flat_parent, flat_pixidx].add(flat_contrib)
+    mat = xp.zeros((M, S + 1), dtype=flat_contrib.dtype)
+    if xp.__name__.startswith("jax"):
+        mat = mat.at[flat_parent, flat_pixidx].add(flat_contrib)
+    else:
+        xp.add.at(mat, (flat_parent, flat_pixidx), flat_contrib)
 
     # 7) Drop the extra column and return
     return mat[:, :S]

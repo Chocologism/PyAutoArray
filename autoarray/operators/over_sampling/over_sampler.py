@@ -1,20 +1,15 @@
 import numpy as np
-import jax.numpy as jnp
-import jax
+
 from typing import Union
 
 from autoconf import conf
-from autoconf import cached_property
 
 from autoarray.mask.mask_2d import Mask2D
 from autoarray.structures.arrays.uniform_2d import Array2D
 
 from autoarray.operators.over_sampling import over_sample_util
 
-from autoarray.numpy_wrapper import register_pytree_node_class
 
-
-@register_pytree_node_class
 class OverSampler:
     def __init__(self, mask: Mask2D, sub_size: Union[int, Array2D]):
         """
@@ -150,9 +145,7 @@ class OverSampler:
 
         self.sub_total = int(np.sum(self.sub_size**2))
         self.sub_length = self.sub_size**self.mask.dimensions
-        self.sub_fraction = Array2D(
-            values=jnp.array(1.0 / self.sub_length.array), mask=self.mask
-        )
+        self.sub_fraction = Array2D(values=1.0 / self.sub_length.array, mask=self.mask)
 
         # Used for JAX based adaptive over sampling.
 
@@ -172,8 +165,6 @@ class OverSampler:
             zip(self.start_indices, self.split_indices)
         ):
             self.segment_ids[start:end] = seg_id
-
-        self.segment_ids = jnp.array(self.segment_ids)
 
     @property
     def sub_is_uniform(self) -> bool:
@@ -207,7 +198,7 @@ class OverSampler:
 
         return sub_pixel_areas
 
-    def binned_array_2d_from(self, array: Array2D) -> "Array2D":
+    def binned_array_2d_from(self, array: Array2D, xp=np) -> "Array2D":
         """
         Convenience method to access the binned-up array in its 1D representation, which is a Grid2D stored as an
         ``ndarray`` of shape [total_unmasked_pixels, 2].
@@ -236,6 +227,7 @@ class OverSampler:
         Sub-pixels that are part of the same mask array pixel are indexed next to one another, such that the second
         sub-pixel in the first pixel has index 1, its next sub-pixel has index 2, and so forth.
         """
+
         if conf.instance["general"]["structures"]["native_binned_only"]:
             return self
 
@@ -252,14 +244,28 @@ class OverSampler:
 
         else:
 
-            # Compute the group means
+            if xp.__name__.startswith("jax"):
 
-            sums = jax.ops.segment_sum(
-                array, self.segment_ids, self.mask.pixels_in_mask
-            )
-            counts = jax.ops.segment_sum(
-                jnp.ones_like(array), self.segment_ids, self.mask.pixels_in_mask
-            )
+                import jax
+
+                sums = jax.ops.segment_sum(
+                    array, self.segment_ids, self.mask.pixels_in_mask
+                )
+                counts = jax.ops.segment_sum(
+                    xp.ones_like(array), self.segment_ids, self.mask.pixels_in_mask
+                )
+
+            else:
+
+                # Sum values per segment
+                sums = np.bincount(self.segment_ids, weights=array, minlength=self.mask.pixels_in_mask)
+
+                # Count number of items per segment
+                counts = np.bincount(self.segment_ids, minlength=self.mask.pixels_in_mask)
+
+                # Avoid division by zero
+                counts[counts == 0] = 1
+
             binned_array_2d = sums / counts
 
         return Array2D(
@@ -267,7 +273,7 @@ class OverSampler:
             mask=self.mask,
         )
 
-    @cached_property
+    @property
     def slim_for_sub_slim(self) -> np.ndarray:
         """
         Derives a 1D ``ndarray`` which maps every subgridded 1D ``slim`` index of the ``Mask2D`` to its

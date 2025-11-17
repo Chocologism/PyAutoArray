@@ -1,11 +1,19 @@
 import logging
 
-import jax.numpy as jnp
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 logger.setLevel(level="INFO")
+
+
+def mapper_indices_from(total_linear_light_profiles, total_mapper_pixels):
+
+    return np.arange(
+        total_linear_light_profiles,
+        total_linear_light_profiles + total_mapper_pixels,
+        dtype=int,
+    )
 
 
 class Preloads:
@@ -44,7 +52,6 @@ class Preloads:
             is fixed to the maximum likelihood solution, allowing the blurred mapping matrix to be preloaded, but
             the intensity values will still be solved for during the inversion.
         """
-
         self.mapper_indices = None
         self.source_pixel_zeroed_indices = None
         self.source_pixel_zeroed_indices_to_keep = None
@@ -52,22 +59,21 @@ class Preloads:
 
         if mapper_indices is not None:
 
-            self.mapper_indices = jnp.array(mapper_indices)
+            self.mapper_indices = np.array(mapper_indices)
 
         if source_pixel_zeroed_indices is not None:
 
-            self.source_pixel_zeroed_indices = jnp.array(source_pixel_zeroed_indices)
+            self.source_pixel_zeroed_indices = np.array(source_pixel_zeroed_indices)
 
-            ids_zeros = jnp.array(source_pixel_zeroed_indices, dtype=int)
+            ids_zeros = np.array(source_pixel_zeroed_indices, dtype=int)
 
-            values_to_solve = jnp.ones(np.max(mapper_indices), dtype=bool)
-            values_to_solve = values_to_solve.at[ids_zeros].set(False)
+            values_to_solve = np.ones(np.max(mapper_indices)+1, dtype=bool)
+            values_to_solve[ids_zeros] = False
 
-            # Get the indices where values_to_solve is True
-            self.source_pixel_zeroed_indices_to_keep = jnp.where(values_to_solve)[0]
+            self.source_pixel_zeroed_indices_to_keep = np.where(values_to_solve)[0]
 
         if linear_light_profile_blurred_mapping_matrix is not None:
 
-            self.linear_light_profile_blurred_mapping_matrix = jnp.array(
+            self.linear_light_profile_blurred_mapping_matrix = np.array(
                 linear_light_profile_blurred_mapping_matrix
             )
