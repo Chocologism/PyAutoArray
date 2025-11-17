@@ -221,7 +221,114 @@ def inverse_transform_sampling_interpolated(probabilities, n_samples, gridx, gri
 
     return output_ids, output_x, output_y
 
+class Hilbert(AbstractImageMeshWeighted):
+    def __init__(
+        self,
+        pixels=10.0,
+        weight_floor=0.0,
+        weight_power=0.0,
+        hilbert_length=193,
+    ):
+        """
+        Computes an image-mesh by computing the Hilbert curve of the adapt data and drawing points from it.
 
+        This requires an adapt-image, which is the image that the Hilbert curve algorithm adapts to in order to compute
+        the image mesh. This could simply be the image itself, or a model fit to the image which removes certain
+        features or noise.
+
+        For example, using the adapt image, the image mesh is computed as follows:
+
+        1) Convert the adapt image to a weight map, which is a 2D array of weight values.
+
+        2) Run the Hilbert algorithm on the weight map, such that the image mesh pixels cluster around the weight map
+        values with higher values.
+
+        Parameters
+        ----------
+        pixels
+            The total number of pixels in the image mesh and drawn from the Hilbert curve.
+        weight_floor
+            The minimum weight value in the weight map, which allows more pixels to be drawn from the lower weight
+            regions of the adapt image.
+        weight_power
+            The power the weight values are raised too, which allows more pixels to be drawn from the higher weight
+            regions of the adapt image.
+        """
+
+        super().__init__(
+            pixels=pixels,
+            weight_floor=weight_floor,
+            weight_power=weight_power,
+        )
+        self.hilbert_length = hilbert_length
+
+    def image_plane_mesh_grid_from(
+        self,
+        mask: Mask2D,
+        adapt_data: Optional[np.ndarray],
+        settings: SettingsInversion = None,
+    ) -> Grid2DIrregular:
+        """
+        Returns an image mesh by running the Hilbert curve on the weight map.
+
+        See the `__init__` docstring for a full description of how this is performed.
+
+        Parameters
+        ----------
+        grid
+            The grid of (y,x) coordinates of the image data the pixelization fits, which the Hilbert curve adapts to.
+        adapt_data
+            The weights defining the regions of the image the Hilbert curve adapts to.
+
+        Returns
+        -------
+
+        """
+        if not mask.is_circular:
+            raise exc.PixelizationException(
+                """
+                Hilbert image-mesh has been called but the input grid does not use a circular mask.
+                
+                Ensure that analysis is using a circular mask via the Mask2D.circular classmethod.
+                """
+            )
+
+        adapt_data_hb, grid_hb = image_and_grid_from_circular(
+            image=adapt_data,
+            mask=mask,
+            mask_radius=mask.circular_radius,
+            mask_centre=mask.mask_centre,
+            pixel_scales=mask.pixel_scales,
+            hilbert_length=self.hilbert_length,
+        )
+
+        weight_map = self.weight_map_from(adapt_data=adapt_data_hb)
+
+        weight_map /= np.sum(weight_map)
+
+        (
+            drawn_id,
+            drawn_x,
+            drawn_y,
+        ) = inverse_transform_sampling_interpolated(
+            probabilities=weight_map,
+            n_samples=self.pixels,
+            gridx=grid_hb[:, 1],
+            gridy=grid_hb[:, 0],
+        )
+
+        mesh_grid = Grid2DIrregular(values=np.stack((drawn_y, drawn_x), axis=-1))
+
+        self.check_mesh_pixels_per_image_pixels(
+            mask=mask, mesh_grid=mesh_grid, settings=settings
+        )
+
+        self.check_adapt_background_pixels(
+            mask=mask, mesh_grid=mesh_grid, adapt_data=adapt_data, settings=settings
+        )
+
+        return mesh_grid
+    
 class Hilbert_Circular(AbstractImageMeshWeighted):
     def __init__(
         self,
