@@ -885,3 +885,55 @@ class Mask2D(Mask):
         central_row_pixels = sum(np.invert(self[pixel_coordinates_2d[0], :]))
 
         return central_row_pixels * self.pixel_scales[0] / 2.0
+
+    @property
+    def is_annular(self) -> bool:
+        """
+        Returns whether the circular mask is annular.
+
+        A mask is considered annular if:
+        - It is circular (verified by equal pixel scales and equal unmasked pixels in central row and column).
+        - The central region is masked (mask[center] = True).
+        - There are unmasked pixels (mask = False) in the outer region, forming a ring-like structure.
+
+        Raises:
+            MaskException: If the mask is not circular or has different pixel scales.
+        """
+        if not self.is_circular:
+            raise exc.MaskException(
+                "The is_annular function can only be called for a circular mask."
+            )
+
+        pixel_coordinates_2d = self.geometry.pixel_coordinates_2d_from(
+            scaled_coordinates_2d=self.mask_centre
+        )
+        center_x, center_y = pixel_coordinates_2d[1], pixel_coordinates_2d[0]
+
+        if not self[center_y, center_x]:
+            return False
+        else:
+            return True
+
+    @cached_property
+    def circular_annular_radii(self) -> float:
+
+        annular_width = self.circular_radius
+        pixel_coordinates_2d = self.geometry.pixel_coordinates_2d_from(
+            scaled_coordinates_2d=self.mask_centre
+        )
+        central_row_pixels = self[pixel_coordinates_2d[0], :]
+
+        def find_true_runs(mask1d):
+            padded = np.pad(mask1d.astype(int), (1, 1), 'constant')
+            diff = np.diff(padded)
+            starts = np.where(diff == 1)[0]
+            ends = np.where(diff == -1)[0]
+            return list(zip(starts, ends))
+
+        true_runs = find_true_runs(central_row_pixels)
+
+        inner_radius = (true_runs[1][1] - true_runs[1][0]) * self.pixel_scales[0] / 2.0
+
+        outter_radius = inner_radius + annular_width
+
+        return (inner_radius, outter_radius)
