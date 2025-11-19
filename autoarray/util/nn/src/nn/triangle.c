@@ -15628,11 +15628,11 @@ char **argv;
   /* Variables for timing the performance of Triangle.  The types are */
   /*   defined in sys/time.h.                                         */
   struct timeval tv0, tv1, tv2, tv3, tv4, tv5, tv6;
-  struct timezone tz;
+  // struct timezone tz;
 #endif /* not NO_TIMER */
 
 #ifndef NO_TIMER
-  gettimeofday(&tv0, &tz);
+  gettimeofday(&tv0, NULL);
 #endif /* not NO_TIMER */
 
   triangleinit(&m);
@@ -15653,7 +15653,7 @@ char **argv;
 
 #ifndef NO_TIMER
   if (!b.quiet) {
-    gettimeofday(&tv1, &tz);
+    gettimeofday(&tv1, NULL);
   }
 #endif /* not NO_TIMER */
 
@@ -15680,7 +15680,7 @@ char **argv;
 
 #ifndef NO_TIMER
   if (!b.quiet) {
-    gettimeofday(&tv2, &tz);
+    gettimeofday(&tv2, NULL);
     if (b.refine) {
       fprintf(stderr, "Mesh reconstruction");
     } else {
@@ -15712,7 +15712,7 @@ char **argv;
 
 #ifndef NO_TIMER
   if (!b.quiet) {
-    gettimeofday(&tv3, &tz);
+    gettimeofday(&tv3, NULL);
     if (b.usesegments && !b.refine) {
       fprintf(stderr, "Segment milliseconds:  %ld\n",
              1000l * (tv3.tv_sec - tv2.tv_sec) +
@@ -15745,7 +15745,7 @@ char **argv;
 
 #ifndef NO_TIMER
   if (!b.quiet) {
-    gettimeofday(&tv4, &tz);
+    gettimeofday(&tv4, NULL);
     if (b.poly && !b.refine) {
       fprintf(stderr, "Hole milliseconds:  %ld\n", 1000l * (tv4.tv_sec - tv3.tv_sec) +
              (tv4.tv_usec - tv3.tv_usec) / 1000l);
@@ -15761,7 +15761,7 @@ char **argv;
 
 #ifndef NO_TIMER
   if (!b.quiet) {
-    gettimeofday(&tv5, &tz);
+    gettimeofday(&tv5, NULL);
 #ifndef CDT_ONLY
     if (b.quality) {
       fprintf(stderr, "Quality milliseconds:  %ld\n",
@@ -15904,7 +15904,7 @@ char **argv;
 
   if (!b.quiet) {
 #ifndef NO_TIMER
-    gettimeofday(&tv6, &tz);
+    gettimeofday(&tv6, NULL);
     fprintf(stderr, "\nOutput milliseconds:  %ld\n",
            1000l * (tv6.tv_sec - tv5.tv_sec) +
            (tv6.tv_usec - tv5.tv_usec) / 1000l);
