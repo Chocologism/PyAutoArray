@@ -916,7 +916,7 @@ class Mask2D(Mask):
         else:
             return True
 
-    @cached_property
+    @property
     def circular_annular_radii(self) -> float:
 
         annular_width = self.circular_radius
