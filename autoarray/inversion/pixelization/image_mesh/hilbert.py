@@ -146,7 +146,7 @@ def image_and_grid_from_circular(image, mask, mask_radius, mask_centre, pixel_sc
     )
 
     grid_hb = np.stack((y1d_hb, x1d_hb), axis=-1)
-    grid_hb_radius = np.sqrt(grid_hb[:, 0] ** 2.0 + grid_hb[:, 1] ** 2.0)
+    grid_hb_radius = np.sqrt((grid_hb[:, 0] - mask_centre[0]) ** 2.0 + (grid_hb[:, 1] - mask_centre[1]) ** 2.0)
     new_grid = grid_hb[grid_hb_radius <= mask_radius]
 
     new_img = griddata(
@@ -184,7 +184,7 @@ def image_and_grid_from_annular(image, mask, outter_radius, inner_radius, mask_c
     )
 
     grid_hb = np.stack((y1d_hb, x1d_hb), axis=-1)
-    grid_hb_radius = np.sqrt(grid_hb[:, 0] ** 2.0 + grid_hb[:, 1] ** 2.0)
+    grid_hb_radius = np.sqrt((grid_hb[:, 0] - mask_centre[0]) ** 2.0 + (grid_hb[:, 1] - mask_centre[1]) ** 2.0)
     new_grid = grid_hb[(grid_hb_radius <= outter_radius) & (grid_hb_radius >= inner_radius)]
 
     new_img = griddata(
