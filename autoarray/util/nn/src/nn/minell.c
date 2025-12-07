@@ -1234,7 +1234,7 @@ int main(int argc, char* argv[])
     point* points = NULL;
     minell* me = NULL;
     struct timeval tv0, tv1;
-    struct timezone tz;
+    // struct timezone tz;
 
     parse_commandline(argc, argv, &fname);
 
@@ -1245,7 +1245,7 @@ int main(int argc, char* argv[])
 
     points_read(fname, 2, &npoints, &points);
 
-    gettimeofday(&tv0, &tz);
+    gettimeofday(&tv0, NULL);
 
     if (userandomseed)
         me_seed = tv0.tv_usec % INT_MAX;
@@ -1253,7 +1253,7 @@ int main(int argc, char* argv[])
     if (!test) {
         me = minell_build(npoints, points);
 
-        gettimeofday(&tv1, &tz);
+        gettimeofday(&tv1, NULL);
 
         minell_info(me, stdout);
         if (me_verbose) {
@@ -1289,7 +1289,7 @@ int main(int argc, char* argv[])
             minell_destroy(me);
         }
 
-        gettimeofday(&tv1, &tz);
+        gettimeofday(&tv1, NULL);
         dt = 1000000 * (tv1.tv_sec - tv0.tv_sec) + tv1.tv_usec - tv0.tv_usec;
         fprintf(stdout, "minimal ellipse:\n");
         fprintf(stdout, "  average build time = %ld us\n", dt / NTEST);
