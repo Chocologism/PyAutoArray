@@ -1,6 +1,8 @@
 import os
 from os import path
 import pytest
+import matplotlib
+matplotlib.use("Agg")
 from matplotlib import pyplot
 
 from autoarray import fixtures
